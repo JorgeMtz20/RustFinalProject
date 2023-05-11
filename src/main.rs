@@ -8,6 +8,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+// Set the number of threads to use for processing the files
+const NUM_THREADS: usize = 3;
+
 // Function to read text files and count occurrences of the word "the"
 fn count_the_occurrences(file_path: &str) -> HashMap<String, usize> {
     // Open file and create buffer reader
@@ -69,23 +72,39 @@ fn task_parallelism(file_paths: &[String]) -> HashMap<String, usize> {
     // Create a hash map to store word counts
     let word_counts = Arc::new(Mutex::new(HashMap::new()));
 
+    // Create an Arc of a Mutex containing the vector of file paths
+    let file_paths = Arc::new(Mutex::new(file_paths.to_vec()));
+
     // Create a vector to store the handles to the threads
     let mut handles = vec![];
 
     // Loop over each file path
-    for file_path in file_paths {
+    for _ in 0..NUM_THREADS {
         // Clone the arc of the word counts hash map
         let word_counts_clone = Arc::clone(&word_counts);
 
-        // Spawn a new thread to count the occurrences of "the" in the file
-        let handle = thread::spawn(move || {
-            let file_word_counts = count_the_occurrences(file_path);
+        // Clone the arc of the vector of file paths
+        let file_paths_clone = Arc::clone(&file_paths);
 
-            // Lock the mutex and update the overall word counts
-            let mut word_counts = word_counts_clone.lock().unwrap();
-            for (word, count) in file_word_counts {
-                let overall_count = word_counts.entry(word).or_insert(0);
-                *overall_count += count;
+        // Spawn a new thread to count the occurrences of "the" in the files
+        let handle = thread::spawn(move || {
+            loop {
+                // Lock the mutex and remove a file path from the vector
+                let mut file_paths = file_paths_clone.lock().unwrap();
+                let file_path = match file_paths.pop() {
+                    Some(file_path) => file_path,
+                    None => break,  // No more file paths left to process
+                };
+
+                // Count the occurrences of "the" in the file
+                let file_word_counts = count_the_occurrences(&file_path);
+
+                // Lock the mutex and update the overall word counts
+                let mut word_counts = word_counts_clone.lock().unwrap();
+                for (word, count) in file_word_counts {
+                    let overall_count = word_counts.entry(word).or_insert(0);
+                    *overall_count += count;
+                }
             }
         });
 
@@ -104,11 +123,21 @@ fn task_parallelism(file_paths: &[String]) -> HashMap<String, usize> {
     word_counts
 }
 
-fn main() {
-    let file_paths = vec![
 
+fn main() {
+    // Construct the file paths
+    let file_paths = vec![
+        String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\github.txt"),
+        String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\js.txt"),
+        String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\vscode.txt"),
     ];
 
-    let word_counts = sequential_processing(&file_paths);
-    println!("{:?}", word_counts);
+
+    // Count the occurrences of "the" in the files using task parallelism
+    let word_counts = task_parallelism(&file_paths);
+
+    // Print the results
+    for (word, count) in word_counts {
+        println!("{}: {}", word, count);
+    }
 }
