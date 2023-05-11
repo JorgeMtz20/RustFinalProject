@@ -1,18 +1,15 @@
 // Import necessary libraries
-use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 use std::thread;
 use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 // Set the number of threads to use for processing the files
 const NUM_THREADS: usize = 3;
 
 // Function to read text files and count occurrences of the word "the"
-fn count_the_occurrences(file_path: &str) -> HashMap<String, usize> {
+fn count_the_occurrences(file_path: &str) -> (String, HashMap<String, usize>) {
     // Open file and create buffer reader
     let file = File::open(file_path).unwrap();
     let reader = BufReader::new(file);
@@ -42,8 +39,8 @@ fn count_the_occurrences(file_path: &str) -> HashMap<String, usize> {
         }
     }
 
-    // Return the hash map of word counts
-    word_counts
+    // Return the file name and the hash map of word counts
+    (file_path.to_string(), word_counts)
 }
 
 // Function to count the occurrences of "the" in multiple files sequentially
@@ -54,11 +51,11 @@ fn sequential_processing(file_paths: &[String]) -> HashMap<String, usize> {
     // Loop over each file path
     for file_path in file_paths {
         // Count the occurrences of "the" in the file
-        let file_word_counts = count_the_occurrences(file_path);
+        let (_, file_word_counts) = count_the_occurrences(file_path);
 
         // Add the file word counts to the overall word counts
-        for (word, count) in file_word_counts {
-            let overall_count = word_counts.entry(word).or_insert(0);
+        for (word, count) in file_word_counts.iter() {
+            let overall_count = word_counts.entry(word.clone()).or_insert(0);
             *overall_count += count;
         }
     }
@@ -68,48 +65,36 @@ fn sequential_processing(file_paths: &[String]) -> HashMap<String, usize> {
 }
 
 // Function to count the occurrences of "the" in multiple files using task parallelism
-fn task_parallelism(file_paths: &[String]) -> HashMap<String, usize> {
-    // Create a hash map to store word counts
-    let word_counts = Arc::new(Mutex::new(HashMap::new()));
-
-    // Create an Arc of a Mutex containing the vector of file paths
-    let file_paths = Arc::new(Mutex::new(file_paths.to_vec()));
-
+fn task_parallelism(file_paths: &[String]) -> Vec<(String, HashMap<String, usize>)> {
     // Create a vector to store the handles to the threads
     let mut handles = vec![];
 
+    // Create a channel for communicating the word counts between threads
+    let (tx, rx) = mpsc::channel();
+
     // Loop over each file path
-    for _ in 0..NUM_THREADS {
-        // Clone the arc of the word counts hash map
-        let word_counts_clone = Arc::clone(&word_counts);
+    for file_path in file_paths {
+        // Clone the transmitter for the channel
+        let tx_clone = tx.clone();
 
-        // Clone the arc of the vector of file paths
-        let file_paths_clone = Arc::clone(&file_paths);
-
-        // Spawn a new thread to count the occurrences of "the" in the files
+        // Spawn a new thread to count the occurrences of "the" in the file
+        let file_path_clone = file_path.clone();
         let handle = thread::spawn(move || {
-            loop {
-                // Lock the mutex and remove a file path from the vector
-                let mut file_paths = file_paths_clone.lock().unwrap();
-                let file_path = match file_paths.pop() {
-                    Some(file_path) => file_path,
-                    None => break,  // No more file paths left to process
-                };
-
-                // Count the occurrences of "the" in the file
-                let file_word_counts = count_the_occurrences(&file_path);
-
-                // Lock the mutex and update the overall word counts
-                let mut word_counts = word_counts_clone.lock().unwrap();
-                for (word, count) in file_word_counts {
-                    let overall_count = word_counts.entry(word).or_insert(0);
-                    *overall_count += count;
-                }
-            }
+            let (file_name, word_counts) = count_the_occurrences(&file_path_clone);
+            tx_clone.send((file_name, word_counts)).unwrap();
         });
 
         // Store the handle to the thread in the vector
         handles.push(handle);
+    }
+
+    // Create a vector to store the file name and word counts tuples
+    let mut file_word_counts = vec![];
+
+    // Collect the word counts from the channel
+    for _ in 0..handles.len() {
+        let (file_name, word_counts) = rx.recv().unwrap();
+        file_word_counts.push((file_name.clone(), word_counts));
     }
 
     // Wait for all threads to finish
@@ -117,27 +102,42 @@ fn task_parallelism(file_paths: &[String]) -> HashMap<String, usize> {
         handle.join().unwrap();
     }
 
-    // Extract the word counts from the hash map and return them
-    let word_counts_mutex = Arc::try_unwrap(word_counts).unwrap();
-    let word_counts = word_counts_mutex.into_inner().unwrap();
-    word_counts
+    // Return the vector of file name and word counts tuples
+    file_word_counts
 }
 
 
+
+fn print_word_counts(file_word_counts: &Vec<HashMap<String, usize>>) {
+    // Loop over each file word counts hash map
+    for (i, word_counts) in file_word_counts.iter().enumerate() {
+        println!("File {}: ", i + 1);
+
+        // Loop over each word and count in the word counts hash map
+        for (word, count) in word_counts {
+            println!("{}: {}", word, count);
+        }
+
+        println!(); // add empty line between files
+    }
+}
+
+
+
 fn main() {
-    // Construct the file paths
+    // Define the file paths to read
     let file_paths = vec![
         String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\github.txt"),
         String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\js.txt"),
         String::from("C:\\Users\\swegs\\Desktop\\Rust Final Project\\vscode.txt"),
     ];
 
-
     // Count the occurrences of "the" in the files using task parallelism
-    let word_counts = task_parallelism(&file_paths);
+    let file_word_counts = task_parallelism(&file_paths);
 
-    // Print the results
-    for (word, count) in word_counts {
-        println!("{}: {}", word, count);
-    }
+    // Print the word counts to the console
+    print_word_counts(&file_word_counts.iter().map(|(_, word_counts)| word_counts.clone()).collect());
 }
+
+
+//Jorge Martinez - ID#20508988 - CSCI - 3334
